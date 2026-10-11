@@ -1,0 +1,5 @@
+{
+  "comfyui": {"repository": "https://github.com/Comfy-Org/ComfyUI", "commit": "ee71d5c4993f29086b27fde1629a945ae48425bf", "version": "v0.36.0"},
+  "searge": {"repository": "https://github.com/SeargeDP/SeargeSDXL", "commit": "2eb5edbc712329d77d1a2f5f1e6c5e64397a4a83", "patch": "patches/searge-gameart.patch"},
+  "model": {"repository": "stabilityai/stable-diffusion-xl-base-1.0", "file": "sd_xl_base_1.0.safetensors", "sha256": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b"}
+}

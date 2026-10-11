@@ -1,0 +1,137 @@
+diff --git a/__init__.py b/__init__.py
+index 2fb6f10..ba51f7b 100644
+--- a/__init__.py
++++ b/__init__.py
+@@ -33,10 +33,13 @@ import folder_paths
+ from .modules._legacy import LEGACY_CLASS_MAPPINGS, LEGACY_DISPLAY_NAME_MAPPINGS
+ 
+ from .searge_sdxl import SEARGE_CLASS_MAPPINGS, SEARGE_DISPLAY_NAME_MAPPINGS
++from .modules.game_art import SeargeGameArtConditioning
+ 
+ folder_paths.add_model_folder_path("annotators", os.path.join(folder_paths.models_dir, "annotators"))
+ 
+ NODE_CLASS_MAPPINGS = SEARGE_CLASS_MAPPINGS | LEGACY_CLASS_MAPPINGS
+ NODE_DISPLAY_NAME_MAPPINGS = SEARGE_DISPLAY_NAME_MAPPINGS | LEGACY_DISPLAY_NAME_MAPPINGS
++NODE_CLASS_MAPPINGS["SeargeGameArtConditioning"] = SeargeGameArtConditioning
++NODE_DISPLAY_NAME_MAPPINGS["SeargeGameArtConditioning"] = "Searge 游戏美术提示词"
+ 
+ __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
+diff --git a/modules/custom_sdxl_ksampler.py b/modules/custom_sdxl_ksampler.py
+index 0291761..f3f9a90 100644
+--- a/modules/custom_sdxl_ksampler.py
++++ b/modules/custom_sdxl_ksampler.py
+@@ -35,7 +35,6 @@ import comfy.sampler_helpers
+ import comfy.utils
+ import latent_preview
+ 
+-from comfy.ldm.modules.diffusionmodules.openaimodel import UNetModel
+ from comfy.model_management import get_torch_device, load_models_gpu
+ 
+ from .utils import slerp_latents
+@@ -62,23 +61,18 @@ def unet_function(func, params):
+     transformer_options = c["transformer_options"]
+     transformer_options["uc_mask"] = torch.Tensor(cond_or_uncond).to(input_x).float()[:, None, None, None]
+ 
+-    return func(input_x, timestep, **c)
+-
+-
+-# --------------------------------------------------------------------------------
+-
+-def new_unet_forward(self, x, timesteps=None, context=None, y=None, control=None, transformer_options={}, **kwargs):
+-    x0 = old_unet_forward(self, x, timesteps, context, y, control, transformer_options, **kwargs)
++    # Scope Searge's filter to the model carrying this registered wrapper.
++    x0 = func(input_x, timestep, **c)
+ 
+     # do filtering here
+     if "uc_mask" in transformer_options:
+         uc_mask = transformer_options["uc_mask"]
+ 
+-        count = timesteps.shape[0] // uc_mask.shape[0]
++        count = timestep.shape[0] // uc_mask.shape[0]
+         uc_mask = uc_mask.repeat(count, 1, 1, 1)
+ 
+         sharpness = 2.0
+-        alpha = 1.0 - (timesteps / 999.0)[:, None, None, None].clone()
++        alpha = 1.0 - (timestep / 999.0)[:, None, None, None].clone()
+         alpha *= 0.001 * sharpness
+         degraded_x0 = bilateral_blur(x0, (13, 13), 3.0, 3.0) * alpha + x0 * (1.0 - alpha)
+         x0 = x0 * uc_mask + degraded_x0 * (1.0 - uc_mask)
+@@ -86,8 +80,6 @@ def new_unet_forward(self, x, timesteps=None, context=None, y=None, control=None
+     return x0
+ 
+ 
+-old_unet_forward = UNetModel.forward
+-UNetModel.forward = new_unet_forward
+ 
+ 
+ # --------------------------------------------------------------------------------
+diff --git a/modules/game_art.py b/modules/game_art.py
+new file mode 100644
+index 0000000..5e67a29
+--- /dev/null
++++ b/modules/game_art.py
+@@ -0,0 +1,26 @@
++"""Game-art conditioning using Searge's prompt composition and SDXL encoding."""
++from .stage_clip_conditioning import SeargeStageClipConditioning
++
++
++class SeargeGameArtConditioning:
++    @classmethod
++    def INPUT_TYPES(cls):
++        return {"required": {
++            "clip": ("CLIP",),
++            "prompt": ("STRING", {"multiline": True}),
++            "style": ("STRING", {"multiline": True}),
++            "negative": ("STRING", {"multiline": True}),
++            "width": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
++            "height": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
++        }}
++
++    RETURN_TYPES = ("CONDITIONING", "CONDITIONING")
++    RETURN_NAMES = ("positive", "negative")
++    FUNCTION = "encode"
++    CATEGORY = "Searge/Game Art"
++
++    def encode(self, clip, prompt, style, negative, width, height):
++        stage = SeargeStageClipConditioning()
++        prompts = stage.create_standard_prompts(prompt, prompt, style, negative, negative, "")
++        positive, _, negative_cond, _ = stage.encode_base(clip, prompts, width, height)
++        return positive, negative_cond
+diff --git a/modules/stage_clip_conditioning.py b/modules/stage_clip_conditioning.py
+index 6711ccd..d53edf4 100644
+--- a/modules/stage_clip_conditioning.py
++++ b/modules/stage_clip_conditioning.py
+@@ -366,14 +366,14 @@ class SeargeStageClipConditioning:
+         neg_width = next_multiple_of(base_width * neg_scale, self.CONDITIONING_ROUNDING)
+         neg_height = next_multiple_of(base_height * neg_scale, self.CONDITIONING_ROUNDING)
+ 
+-        base_positive = encoder.encode(base_clip, pos_width, pos_height, 0, 0, target_width, target_height,
++        base_positive = encoder.execute(base_clip, pos_width, pos_height, 0, 0, target_width, target_height,
+                                        pos_main, pos_sec)[0]
+-        base_positive_style = encoder.encode(base_clip, pos_width, pos_height, 0, 0, target_width, target_height,
++        base_positive_style = encoder.execute(base_clip, pos_width, pos_height, 0, 0, target_width, target_height,
+                                              pos_style, pos_style)[0]
+ 
+-        base_negative = encoder.encode(base_clip, neg_width, neg_height, 0, 0, target_width, target_height,
++        base_negative = encoder.execute(base_clip, neg_width, neg_height, 0, 0, target_width, target_height,
+                                        neg_main, neg_sec)[0]
+-        base_negative_style = encoder.encode(base_clip, neg_width, neg_height, 0, 0, target_width, target_height,
++        base_negative_style = encoder.execute(base_clip, neg_width, neg_height, 0, 0, target_width, target_height,
+                                              neg_style, neg_style)[0]
+ 
+         return (base_positive, base_positive_style, base_negative, base_negative_style)
+@@ -393,10 +393,10 @@ class SeargeStageClipConditioning:
+         neg_width = next_multiple_of(refiner_width * neg_scale, self.CONDITIONING_ROUNDING)
+         neg_height = next_multiple_of(refiner_height * neg_scale, self.CONDITIONING_ROUNDING)
+ 
+-        refiner_positive = encoder.encode(refiner_clip, pos_ascore, pos_width, pos_height, pos)[0]
+-        refiner_positive_style = encoder.encode(refiner_clip, pos_ascore, pos_width, pos_height, pos_style)[0]
++        refiner_positive = encoder.execute(refiner_clip, pos_ascore, pos_width, pos_height, pos)[0]
++        refiner_positive_style = encoder.execute(refiner_clip, pos_ascore, pos_width, pos_height, pos_style)[0]
+ 
+-        refiner_negative = encoder.encode(refiner_clip, neg_ascore, neg_width, neg_height, neg)[0]
+-        refiner_negative_style = encoder.encode(refiner_clip, neg_ascore, neg_width, neg_height, neg_style)[0]
++        refiner_negative = encoder.execute(refiner_clip, neg_ascore, neg_width, neg_height, neg)[0]
++        refiner_negative_style = encoder.execute(refiner_clip, neg_ascore, neg_width, neg_height, neg_style)[0]
+ 
+         return (refiner_positive, refiner_positive_style, refiner_negative, refiner_negative_style)

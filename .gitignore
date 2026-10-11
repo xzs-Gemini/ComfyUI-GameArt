@@ -1,0 +1,15 @@
+.venv/
+models/
+data/
+__pycache__/
+*.pyc
+ComfyUI/
+Searge-source/
+SeargeSDXL/
+
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+*.log

@@ -1,0 +1,6 @@
+gameart:
+  base_path: models
+  checkpoints: checkpoints
+  loras: loras
+  vae: vae
+  upscale_models: upscale_models
